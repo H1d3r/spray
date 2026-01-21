@@ -30,24 +30,25 @@ type Runner struct {
 
 	taskCh   chan *Task
 	poolwg   *sync.WaitGroup
-	outwg    *sync.WaitGroup
-	outputCh chan *baseline.Baseline
+	OutWg    *sync.WaitGroup
+	OutputCh chan *baseline.Baseline
 	fuzzyCh  chan *baseline.Baseline
 	bar      *mpb.Bar
 	bruteMod bool
 
-	ProxyClient   proxyclient.Dial
-	IsCheck       bool
-	Pools         *ants.PoolWithFunc
-	PoolName      map[string]bool
-	Tasks         *TaskGenerator
-	Rules         *rule.Program
-	AppendRules   *rule.Program
-	Headers       map[string]string
-	FilterExpr    *vm.Program
-	MatchExpr     *vm.Program
-	RecursiveExpr *vm.Program
-	OutputFile    *files.File
+	ProxyClient          proxyclient.Dial
+	IsCheck              bool
+	DisableOutputHandler bool // 禁用内置的 OutputHandler，用于 SDK 等外部控制
+	Pools                *ants.PoolWithFunc
+	PoolName             map[string]bool
+	Tasks                *TaskGenerator
+	Rules                *rule.Program
+	AppendRules          *rule.Program
+	Headers              map[string]string
+	FilterExpr           *vm.Program
+	MatchExpr            *vm.Program
+	RecursiveExpr        *vm.Program
+	OutputFile           *files.File
 	//FuzzyFile     *files.File
 	DumpFile    *files.File
 	StatFile    *files.File
@@ -71,9 +72,9 @@ func (r *Runner) PrepareConfig() *pool.Config {
 		Headers:        make(http.Header),
 		Method:         r.Method,
 		Mod:            pool.ModMap[r.Mod],
-		OutputCh:       r.outputCh,
+		OutputCh:       r.OutputCh,
 		FuzzyCh:        r.fuzzyCh,
-		Outwg:          r.outwg,
+		Outwg:          r.OutWg,
 		Fuzzy:          r.Fuzzy,
 		CheckPeriod:    r.CheckPeriod,
 		ErrPeriod:      int32(r.ErrPeriod),
@@ -134,7 +135,11 @@ func (r *Runner) Prepare(ctx context.Context) error {
 	if r.bruteMod {
 		r.IsCheck = false
 	}
-	r.OutputHandler()
+	// 如果设置了 DisableOutputHandler，则跳过内置的输出处理器
+	// 这允许 SDK 等外部调用者完全控制 OutputCh 的处理
+	if !r.DisableOutputHandler {
+		r.OutputHandler()
+	}
 	var err error
 	if r.IsCheck {
 		// 仅check, 类似httpx
@@ -278,7 +283,7 @@ Loop:
 		r.bar.Wait()
 	}
 	r.poolwg.Wait()
-	r.outwg.Wait()
+	r.OutWg.Wait()
 }
 
 func (r *Runner) RunWithCheck(ctx context.Context) {
@@ -304,7 +309,7 @@ Loop:
 		}
 	}
 
-	r.outwg.Wait()
+	r.OutWg.Wait()
 }
 
 func (r *Runner) AddRecursive(bl *baseline.Baseline) {
@@ -420,7 +425,7 @@ func (r *Runner) OutputHandler() {
 	go func() {
 		for {
 			select {
-			case bl, ok := <-r.outputCh:
+			case bl, ok := <-r.OutputCh:
 				if !ok {
 					return
 				}
@@ -440,7 +445,7 @@ func (r *Runner) OutputHandler() {
 						logs.Log.Debug(bl.String())
 					}
 				}
-				r.outwg.Done()
+				r.OutWg.Done()
 			}
 		}
 	}()
@@ -453,7 +458,7 @@ func (r *Runner) OutputHandler() {
 					return
 				}
 				r.Output(bl)
-				r.outwg.Done()
+				r.OutWg.Done()
 			}
 		}
 	}()
